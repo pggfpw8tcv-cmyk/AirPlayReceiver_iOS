@@ -1,0 +1,73 @@
+name: AirPlayReceiver
+options:
+  minimumXcodeGenVersion: 2.42.0
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    SWIFT_VERSION: "5.0"
+    CLANG_CXX_LANGUAGE_STANDARD: c++17
+    CLANG_ENABLE_OBJC_ARC: YES
+    ENABLE_BITCODE: NO
+    TARGETED_DEVICE_FAMILY: "1,2"
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  Receiver:
+    type: application
+    platform: iOS
+    sources:
+      - path: Receiver
+        excludes: [Info.plist]
+      - path: Core
+      - path: Resources
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.airplay.receiver
+        PRODUCT_NAME: Receiver
+        INFOPLIST_FILE: Receiver/Info.plist
+        SWIFT_OBJC_BRIDGING_HEADER: Receiver/Bridge/Receiver-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - $(inherited)
+          - $(SRCROOT)/Core
+          - $(SRCROOT)/Receiver/Bridge
+          - $(SRCROOT)/Receiver/Media
+          - $(SRCROOT)/.deps/src/uxplay/lib
+        "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]": $(SRCROOT)/.deps/iphoneos/lib
+        "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]": $(SRCROOT)/.deps/iphonesimulator/lib
+        OTHER_LDFLAGS: [$(inherited), -luxplay, -lplist, -lcrypto]
+    dependencies:
+      - sdk: AVFoundation.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreMedia.framework
+      - sdk: VideoToolbox.framework
+      - sdk: Security.framework
+      - sdk: libz.tbd
+  ReceiverTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/Native
+      - path: Receiver/Media
+      - path: Core
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.airplay.receiver.tests
+        GENERATE_INFOPLIST_FILE: YES
+        HEADER_SEARCH_PATHS: [$(inherited), $(SRCROOT)/Core, $(SRCROOT)/Receiver/Media]
+    dependencies:
+      - sdk: AVFoundation.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreMedia.framework
+schemes:
+  Receiver:
+    build:
+      targets:
+        Receiver: all
+        ReceiverTests: [test]
+    test:
+      targets: [ReceiverTests]
+      gatherCoverageData: true

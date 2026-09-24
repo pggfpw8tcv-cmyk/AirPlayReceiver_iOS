@@ -1,0 +1,64 @@
+name: Build unsigned iOS IPA
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: receiver-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  portable-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch verified upstream sources
+        run: python3 scripts/fetch_dependencies.py
+      - name: Build and test actual receiver core
+        run: |
+          cmake -S . -B build/tests -DRECEIVER_BUILD_UPSTREAM=ON
+          cmake --build build/tests --parallel 4
+          ctest --test-dir build/tests --output-on-failure
+          python3 -m unittest discover -s Tests -p 'test_*.py'
+  ios:
+    needs: portable-tests
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Record toolchain
+        run: |
+          xcodebuild -version
+          xcodegen --version
+          cmake --version
+      - name: Build and validate unsigned IPA
+        run: bash scripts/build_ipa.sh
+      - name: Run native media tests on simulator
+        run: bash scripts/test_simulator.sh
+      - name: Upload unsigned IPA and notices
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirPlayReceiver-unsigned
+          path: build/artifacts/
+          if-no-files-found: error
+      - name: Upload build and test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: |
+            build/artifacts/xcodebuild.log
+            build/SimulatorTests.xcresult
+          if-no-files-found: ignore

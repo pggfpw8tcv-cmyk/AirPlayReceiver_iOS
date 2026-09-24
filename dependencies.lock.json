@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "sources": {
+    "uxplay": {
+      "revision": "39c15630f6e28412d29168c62f07600d38537352",
+      "url": "https://codeload.github.com/FDH2/UxPlay/tar.gz/39c15630f6e28412d29168c62f07600d38537352",
+      "sha256": "fff1852b8eccf0a35169efe42cc7b80dc8aff6d26ac4c25e2a91b5657988f22a",
+      "license": "GPL-3.0-or-later; see individual source notices"
+    },
+    "libplist": {
+      "revision": "2.7.0",
+      "url": "https://codeload.github.com/libimobiledevice/libplist/tar.gz/refs/tags/2.7.0",
+      "sha256": "66fa17a29270cb25ceaf189430ea38037c066652c2989b58d7ef6120b1a208d3",
+      "license": "LGPL-2.1-or-later"
+    },
+    "openssl": {
+      "revision": "openssl-3.5.5",
+      "url": "https://codeload.github.com/openssl/openssl/tar.gz/refs/tags/openssl-3.5.5",
+      "sha256": "4ca7d770686ae621c88c78ee20a49c11aaa984c354ed038137ba87850e5386b8",
+      "license": "Apache-2.0"
+    }
+  },
+  "research": {
+    "shairport-sync": { "url": "https://github.com/mikebrady/shairport-sync", "revision": "01078ad15d4da06dffba0c5f15ffeaf9146a2a2a", "status": "not yet integrated" },
+    "nqptp": { "url": "https://github.com/mikebrady/nqptp", "revision": "c925f27c1fd12e4033ac477e5a405969b0b0260b", "status": "not yet integrated" }
+  }
+}

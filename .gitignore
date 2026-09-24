@@ -1,0 +1,9 @@
+build/
+.deps/
+.superpowers/
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+__pycache__/
+*.ipa
+.DS_Store
