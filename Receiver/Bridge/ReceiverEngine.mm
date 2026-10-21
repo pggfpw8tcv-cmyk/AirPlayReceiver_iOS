@@ -46,6 +46,7 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     std::atomic<bool> _active, _receiving;
     std::atomic<uint64_t> _generation, _videoGeneration, _audioGeneration;
     std::atomic<int> _videoPending, _audioPending;
+    std::atomic<int> _videoLogCount;
     std::mutex _clientsMutex;
     std::set<std::string> _clients;
     NSURL *_clientsURL;
@@ -101,6 +102,7 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
         return;
     }
     const auto generation = ++_generation;
+    _videoLogCount = 0;
     [_published removeAllObjects];
     [self.delegate receiverStatus:@"起動中…" active:YES];
     dispatch_async(_controlQueue, ^{
@@ -226,9 +228,21 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     const auto generation = _generation.load(), media = _videoGeneration.load();
     const auto time = presentation(packet->ntp_time_local);
     const BOOL hevc = packet->is_h265;
+    if (_videoLogCount.load() < 6) {
+        _videoLogCount++;
+        struct timespec nowTs; clock_gettime(CLOCK_REALTIME, &nowTs);
+        const int64_t wallNs = int64_t(nowTs.tv_sec) * 1000000000LL + nowTs.tv_nsec;
+        const long long deltaMs = ((long long)packet->ntp_time_local - (long long)wallNs) / 1000000LL;
+        [self postDiagnostic:[NSString stringWithFormat:@"video packet: %d bytes, %@, time delta %lld ms, %@",
+            (int)packet->data_len, hevc ? @"H.265" : @"H.264", deltaMs, time ? @"timestamp ok" : @"DROPPED (timestamp out of range)"]];
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self->_active && generation == self->_generation.load() && media == self->_videoGeneration.load() && time) {
             if ([self->_video enqueueAnnexB:data hevc:hevc presentationTime:*time]) [self markReceiving];
+            else if (self->_videoLogCount.load() < 12) {
+                self->_videoLogCount++;
+                [self postDiagnostic:@"video: enqueue failed (no SPS/PPS yet, layer busy, or decoder error)"];
+            }
         }
         --self->_videoPending;
     });
