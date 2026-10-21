@@ -29,12 +29,33 @@
 @end
 
 static ReceiverEngine *owner(void *cls) { return (__bridge ReceiverEngine *)cls; }
+// The sender timestamps (ntp_time_local) are NOT on the iPad's wall clock (observed: tiny values),
+// so instead of trusting an absolute base we anchor the first packet to "host now + latency" and
+// keep that offset for audio and video alike, which preserves A/V sync.
+static std::mutex gAnchorMutex;
+static bool gAnchored = false;
+static int64_t gAnchorOffset = 0;
+static void resetPresentationAnchor() {
+    std::lock_guard<std::mutex> lock(gAnchorMutex);
+    gAnchored = false;
+}
 static std::optional<uint64_t> presentation(uint64_t pts) {
-    struct timespec now; clock_gettime(CLOCK_REALTIME, &now);
-    uint64_t wall = uint64_t(now.tv_sec) * 1000000000ULL + now.tv_nsec;
-    CMTime host = CMTimeConvertScale(CMClockGetTime(CMClockGetHostTimeClock()), 1000000000, kCMTimeRoundingMethod_Default);
-    // The upstream has already mapped sender timestamps to the local realtime clock.
-    return receiver::hostPresentationTime(pts, wall, (uint64_t)host.value, 0);
+    const int64_t now = (int64_t)CMTimeConvertScale(CMClockGetTime(CMClockGetHostTimeClock()), 1000000000, kCMTimeRoundingMethod_Default).value;
+    const int64_t latency = 200000000; // 200 ms jitter buffer
+    if (pts == 0 || pts > (uint64_t)INT64_MAX / 2) return (uint64_t)(now + latency);
+    std::lock_guard<std::mutex> lock(gAnchorMutex);
+    int64_t target = 0;
+    if (gAnchored) {
+        target = (int64_t)pts + gAnchorOffset;
+        // Clock jump or long pause: start over instead of playing garbage.
+        if (target < now - 1000000000LL || target > now + 3000000000LL) gAnchored = false;
+    }
+    if (!gAnchored) {
+        gAnchorOffset = now + latency - (int64_t)pts;
+        gAnchored = true;
+        target = now + latency;
+    }
+    return (uint64_t)target;
 }
 
 @implementation ReceiverEngine {
@@ -103,6 +124,7 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     }
     const auto generation = ++_generation;
     _videoLogCount = 0;
+    resetPresentationAnchor();
     [_published removeAllObjects];
     [self.delegate receiverStatus:@"起動中…" active:YES];
     dispatch_async(_controlQueue, ^{
@@ -234,7 +256,7 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
         const int64_t wallNs = int64_t(nowTs.tv_sec) * 1000000000LL + nowTs.tv_nsec;
         const long long deltaMs = ((long long)packet->ntp_time_local - (long long)wallNs) / 1000000LL;
         [self postDiagnostic:[NSString stringWithFormat:@"video packet: %d bytes, %@, time delta %lld ms, %@",
-            (int)packet->data_len, hevc ? @"H.265" : @"H.264", deltaMs, time ? @"timestamp ok" : @"DROPPED (timestamp out of range)"]];
+            (int)packet->data_len, hevc ? @"H.265" : @"H.264", deltaMs, time ? @"scheduled" : @"DROPPED"]];
     }
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self->_active && generation == self->_generation.load() && media == self->_videoGeneration.load() && time) {
@@ -278,6 +300,7 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     dispatch_async(_audioQueue, ^{ if (media == self->_audioGeneration.load()) [self->_audio flush]; });
 }
 - (void)endStream {
+    resetPresentationAnchor();
     [self flushAudio]; [self flushVideo]; _receiving = false;
     const auto generation = _generation.load();
     dispatch_async(dispatch_get_main_queue(), ^{
