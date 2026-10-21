@@ -12,7 +12,7 @@
 }
 - (void)netService:(NSNetService *)sender didNotPublish:(NSDictionary<NSString *, NSNumber *> *)errorDict {
     NSError *error = [NSError errorWithDomain:@"ReceiverBonjour" code:[errorDict[NSNetServicesErrorCode] integerValue]
-        userInfo:@{NSLocalizedDescriptionKey:@"受信機を公開できません。設定のローカルネットワーク許可とWi-Fi接続を確認してください。"}];
+        userInfo:@{NSLocalizedDescriptionKey:@"Empfänger kann nicht veröffentlicht werden. Bitte in den Einstellungen den Zugriff auf das lokale Netzwerk und die WLAN-Verbindung prüfen."}];
     if (_handler) _handler(sender.type, error);
 }
 @end

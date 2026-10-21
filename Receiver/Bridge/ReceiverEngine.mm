@@ -67,7 +67,7 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     std::atomic<bool> _active, _receiving;
     std::atomic<uint64_t> _generation, _videoGeneration, _audioGeneration;
     std::atomic<int> _videoPending, _audioPending;
-    std::atomic<int> _videoLogCount;
+    std::atomic<int> _videoLogCount, _audioLogCount;
     std::mutex _clientsMutex;
     std::set<std::string> _clients;
     NSURL *_clientsURL;
@@ -119,14 +119,14 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     if (identity.length != 6 || name.length == 0 || [name lengthOfBytesUsingEncoding:NSUTF8StringEncoding] > 50 ||
         [name containsString:@".local"] || [name rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound) {
         _active = false;
-        [self.delegate receiverStatus:@"受信名は50バイト以内で入力してください（.local・制御文字は使用できません）。" active:NO];
+        [self.delegate receiverStatus:@"Der Empfängername darf höchstens 50 Bytes lang sein (ohne .local und Steuerzeichen)." active:NO];
         return;
     }
     const auto generation = ++_generation;
-    _videoLogCount = 0;
+    _videoLogCount = 0; _audioLogCount = 0;
     resetPresentationAnchor();
     [_published removeAllObjects];
-    [self.delegate receiverStatus:@"起動中…" active:YES];
+    [self.delegate receiverStatus:@"Wird gestartet…" active:YES];
     dispatch_async(_controlQueue, ^{
         @autoreleasepool {
             NSError *error = nil;
@@ -181,7 +181,7 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
             callbacks.report_client_request = [](void *, char *, char *, char *, bool *admit) { *admit = true; };
             callbacks.passwd = [](void *, int *length) -> const char * { *length = 0; return nullptr; };
             // HLS isn't advertised. Defensive callbacks reject unsolicited HLS controls safely.
-            callbacks.on_video_play = [](void *c, const char *, float) { [owner(c) postDiagnostic:@"HLS動画送信は未実装です。画面ミラーリングを使用してください。"]; };
+            callbacks.on_video_play = [](void *c, const char *, float) { [owner(c) postDiagnostic:@"HLS-Videoübertragung ist nicht implementiert. Bitte die Bildschirmspiegelung verwenden."]; };
             callbacks.on_video_scrub = [](void *, float) {};
             callbacks.on_video_rate = [](void *, float) {};
             callbacks.on_video_stop = [](void *) {};
@@ -191,19 +191,19 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
             int dnsError = 0;
             self->_dnssd = dnssd_init(name.UTF8String, (int)[name lengthOfBytesUsingEncoding:NSUTF8StringEncoding],
                 (const char *)identity.bytes, 6, requirePIN ? 1 : 0, &dnsError);
-            if (!self->_dnssd) { [self fail:@"Bonjourの初期化に失敗しました。" generation:generation]; return; }
+            if (!self->_dnssd) { [self fail:@"Bonjour-Initialisierung fehlgeschlagen." generation:generation]; return; }
             // Preserve upstream authentication/audio bits; remove unimplemented media/metadata.
             const int disabled[] = {0,1,2,3,4,5,13,15,16,17,40,41,42,46,48,50,51,52,54};
             for (int bit : disabled) dnssd_set_airplay_features(self->_dnssd, bit, 0);
             self->_raop = raop_init(&callbacks);
-            if (!self->_raop) { [self fail:@"受信コアの初期化に失敗しました。" generation:generation]; return; }
+            if (!self->_raop) { [self fail:@"Initialisierung des Empfängerkerns fehlgeschlagen." generation:generation]; return; }
             // Do not enable upstream raw-packet logging (may contain credentials or media).
             raop_set_log_level(self->_raop, 0);
             const unsigned char *mac = (const unsigned char *)identity.bytes;
             NSString *device = [NSString stringWithFormat:@"%02X:%02X:%02X:%02X:%02X:%02X",mac[0],mac[1],mac[2],mac[3],mac[4],mac[5]];
             NSURL *key = [storage URLByAppendingPathComponent:@"receiver.key"];
             if (raop_init2(self->_raop, 0, device.UTF8String, key.fileSystemRepresentation) != 0) {
-                [self fail:@"受信キーの初期化に失敗しました。" generation:generation]; return;
+                [self fail:@"Initialisierung des Empfängerschlüssels fehlgeschlagen." generation:generation]; return;
             }
             raop_set_dnssd(self->_raop, self->_dnssd);
             raop_set_plist(self->_raop, "width", 1920);
@@ -216,14 +216,14 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
                 if (!engine || !engine->_active || generation != engine->_generation.load()) return;
                 if (publishError) { [engine stopWithStatus:publishError.localizedDescription]; return; }
                 [engine->_published addObject:type];
-                if (engine->_published.count == 2 && !engine->_receiving) [engine.delegate receiverStatus:@"接続待ち" active:YES];
+                if (engine->_published.count == 2 && !engine->_receiving) [engine.delegate receiverStatus:@"Wartet auf Verbindung" active:YES];
             });
             unsigned short port = 0;
-            if (raop_start_httpd(self->_raop, &port) < 0 || !port) { [self fail:@"受信ポートを開けません。" generation:generation]; return; }
+            if (raop_start_httpd(self->_raop, &port) < 0 || !port) { [self fail:@"Empfangsport kann nicht geöffnet werden." generation:generation]; return; }
             raop_set_port(self->_raop, port);
             dnssd_register_raop(self->_dnssd, port);
             dnssd_register_airplay(self->_dnssd, port);
-            [self postDiagnostic:[NSString stringWithFormat:@"受信ポート: %u / UxPlay core", port]];
+            [self postDiagnostic:[NSString stringWithFormat:@"Empfangsport: %u / UxPlay-Kern", port]];
         }
     });
 }
@@ -238,7 +238,7 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     const auto generation = _generation.load();
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self->_active && generation == self->_generation.load()) {
-            [self.delegate receiverStatus:@"受信中" active:YES];
+            [self.delegate receiverStatus:@"Empfang läuft" active:YES];
             [self.delegate receiverPIN:@""];
         }
     });
@@ -255,15 +255,15 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
         struct timespec nowTs; clock_gettime(CLOCK_REALTIME, &nowTs);
         const int64_t wallNs = int64_t(nowTs.tv_sec) * 1000000000LL + nowTs.tv_nsec;
         const long long deltaMs = ((long long)packet->ntp_time_local - (long long)wallNs) / 1000000LL;
-        [self postDiagnostic:[NSString stringWithFormat:@"video packet: %d bytes, %@, time delta %lld ms, %@",
-            (int)packet->data_len, hevc ? @"H.265" : @"H.264", deltaMs, time ? @"scheduled" : @"DROPPED"]];
+        [self postDiagnostic:[NSString stringWithFormat:@"Videopaket: %d Bytes, %@, Zeitabweichung %lld ms, %@",
+            (int)packet->data_len, hevc ? @"H.265" : @"H.264", deltaMs, time ? @"eingeplant" : @"VERWORFEN"]];
     }
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self->_active && generation == self->_generation.load() && media == self->_videoGeneration.load() && time) {
             if ([self->_video enqueueAnnexB:data hevc:hevc presentationTime:*time]) [self markReceiving];
             else if (self->_videoLogCount.load() < 12) {
                 self->_videoLogCount++;
-                [self postDiagnostic:@"video: enqueue failed (no SPS/PPS yet, layer busy, or decoder error)"];
+                [self postDiagnostic:@"Video: Wiedergabe fehlgeschlagen (noch kein SPS/PPS, Layer ausgelastet oder Decoderfehler)"];
             }
         }
         --self->_videoPending;
@@ -276,7 +276,9 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
         if (!self->_active || generation != self->_generation.load() || media != self->_audioGeneration.load()) return;
         NSError *error = nil;
         if (![self->_audio configureCompression:compression framesPerPacket:frames error:&error])
-            [self postDiagnostic:[NSString stringWithFormat:@"音声初期化エラー: %@", error.localizedDescription]];
+            [self postDiagnostic:[NSString stringWithFormat:@"Audio-Initialisierungsfehler: %@", error.localizedDescription]];
+        else
+            [self postDiagnostic:[NSString stringWithFormat:@"Audio bereit: Codec %u, %u Frames pro Paket", compression, frames]];
     });
 }
 - (void)receiveAudio:(audio_decode_struct *)packet {
@@ -288,6 +290,10 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     dispatch_async(_audioQueue, ^{
         if (self->_active && generation == self->_generation.load() && media == self->_audioGeneration.load() && time)
             if ([self->_audio enqueuePacket:data presentationTime:*time]) [self markReceiving];
+            else if (self->_audioLogCount.load() < 4) {
+                self->_audioLogCount++;
+                [self postDiagnostic:[NSString stringWithFormat:@"Audiopaket abgelehnt: %@", self->_audio.lastFailure ?: @"unbekannt"]];
+            }
         --self->_audioPending;
     });
 }
@@ -304,11 +310,11 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     [self flushAudio]; [self flushVideo]; _receiving = false;
     const auto generation = _generation.load();
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (self->_active && generation == self->_generation.load()) [self.delegate receiverStatus:@"接続待ち" active:YES];
+        if (self->_active && generation == self->_generation.load()) [self.delegate receiverStatus:@"Wartet auf Verbindung" active:YES];
     });
 }
 - (void)stop {
-    [self stopWithStatus:@"停止"];
+    [self stopWithStatus:@"Gestoppt"];
 }
 - (void)stopWithStatus:(NSString *)status {
     NSAssert(NSThread.isMainThread, @"Control from main queue");
@@ -317,7 +323,7 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     _active = false; ++_generation; _receiving = false;
     [self flushVideo]; [self flushAudio];
     [self.delegate receiverPIN:@""];
-    [self.delegate receiverStatus:@"停止処理中…" active:YES];
+    [self.delegate receiverStatus:@"Wird beendet…" active:YES];
     dispatch_async(_controlQueue, ^{
         if (self->_dnssd) { dnssd_unregister_raop(self->_dnssd); dnssd_unregister_airplay(self->_dnssd); }
         if (self->_raop) { raop_destroy(self->_raop); self->_raop = nullptr; }
@@ -334,8 +340,8 @@ static std::optional<uint64_t> presentation(uint64_t pts) {
     dispatch_async(_controlQueue, ^{
         const auto result = receiver::probePTPPorts();
         NSString *message = result.available
-            ? @"PTP診断: UDP 319/320の排他的bind成功。PTP受信・時刻同期・AirPlay 2再生は未検証です。"
-            : [NSString stringWithFormat:@"PTP診断: UDP %uを使用できません: %s (%d)", result.failedPort, strerror(result.error), result.error];
+            ? @"PTP-Diagnose: UDP 319/320 exklusiv gebunden. PTP-Empfang, Zeitsynchronisierung und AirPlay-2-Wiedergabe sind ungetestet."
+            : [NSString stringWithFormat:@"PTP-Diagnose: UDP %u nicht verfügbar: %s (%d)", result.failedPort, strerror(result.error), result.error];
         [self postDiagnostic:message];
     });
 }
