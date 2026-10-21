@@ -5,7 +5,7 @@ import SwiftUI
 final class ReceiverModel: NSObject, ObservableObject, ReceiverEngineDelegate {
     @Published var name: String = UserDefaults.standard.string(forKey: "receiverName") ?? "iOS Receiver"
     @Published var requirePIN = true
-    @Published private(set) var status = "停止"
+    @Published private(set) var status = "Gestoppt"
     @Published private(set) var active = false
     @Published private(set) var pin = ""
     @Published private(set) var diagnostics = [String]()
@@ -20,17 +20,17 @@ final class ReceiverModel: NSObject, ObservableObject, ReceiverEngineDelegate {
             guard let kind = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   kind == AVAudioSession.InterruptionType.began.rawValue else { return }
             self?.engine.stop()
-            self?.receiverDiagnostic("音声が割り込まれたため停止しました。受信開始で再接続できます。")
+            self?.receiverDiagnostic("Gestoppt, weil der Ton unterbrochen wurde. Mit „Empfang starten“ erneut verbinden.")
         })
         observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
             guard let reason = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
                   reason == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
             self?.engine.stop()
-            self?.receiverDiagnostic("音声出力が切断されました。受信開始で再接続してください。")
+            self?.receiverDiagnostic("Audioausgabe getrennt. Bitte mit „Empfang starten“ erneut verbinden.")
         })
         observers.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
             self?.engine.stop()
-            self?.receiverDiagnostic("音声サービスが再起動しました。受信開始で再接続してください。")
+            self?.receiverDiagnostic("Der Audiodienst wurde neu gestartet. Bitte mit „Empfang starten“ erneut verbinden.")
         })
     }
 

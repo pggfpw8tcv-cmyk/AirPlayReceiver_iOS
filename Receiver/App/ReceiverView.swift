@@ -33,35 +33,37 @@ struct ReceiverView: View {
             VStack(spacing: 0) {
                 ZStack(alignment: .topTrailing) {
                     VideoSurface(display: receiver.engine.displayLayer)
+                        .contentShape(Rectangle())
+                        .onTapGesture { fullscreen.toggle() }
                     Button { fullscreen.toggle() } label: {
                         Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                             .padding(14).background(.ultraThinMaterial, in: Circle()).padding()
                     }
-                    .accessibilityLabel(fullscreen ? "全画面を終了" : "全画面表示")
+                    .accessibilityLabel(fullscreen ? "Vollbild beenden" : "Vollbild")
                 }
                 .frame(height: fullscreen ? geometry.size.height : geometry.size.height * 0.45)
                 if !fullscreen {
                     Form {
                         Section("AirPlay Receiver") {
                             Label(receiver.status, systemImage: receiver.active ? "airplayvideo" : "power")
-                            TextField("受信名", text: $receiver.name).disabled(receiver.active)
-                            Toggle("接続時にPINを要求", isOn: $receiver.requirePIN).disabled(receiver.active)
+                            TextField("Empfängername", text: $receiver.name).disabled(receiver.active)
+                            Toggle("PIN bei Verbindung verlangen", isOn: $receiver.requirePIN).disabled(receiver.active)
                             if !receiver.pin.isEmpty {
                                 Text(receiver.pin).font(.largeTitle.monospacedDigit()).textSelection(.enabled)
                             }
-                            Button(receiver.active ? "受信停止" : "受信開始") {
+                            Button(receiver.active ? "Empfang stoppen" : "Empfang starten") {
                                 if receiver.active { receiver.engine.stop() } else { receiver.start() }
                             }
-                            .disabled(receiver.status == "停止処理中…")
-                            Text("同じWi-Fiの送信端末で「画面ミラーリング」から受信名を選択してください。")
+                            .disabled(receiver.status == "Wird beendet…")
+                            Text("Wähle auf dem Sendegerät im selben WLAN unter „Bildschirmspiegelung“ den Empfängernamen aus.")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
-                        Section("開発状況と診断") {
-                            Text("ミラーリング受信: 実機検証待ち\nAirPlay 2マルチルーム: 未実装")
+                        Section("Entwicklungsstand und Diagnose") {
+                            Text("Spiegelungsempfang: Test auf echtem Gerät steht aus\nAirPlay-2-Multiroom: nicht implementiert")
                                 .font(.footnote)
-                            Button("AirPlay 2同期ポートを診断") { receiver.engine.probeAirPlay2Ports() }
+                            Button("AirPlay-2-Synchronisierungsports prüfen") { receiver.engine.probeAirPlay2Ports() }
                             if !receiver.diagnostics.isEmpty {
-                                ShareLink("診断ログを共有", item: receiver.diagnostics.joined(separator: "\n"))
+                                ShareLink("Diagnoseprotokoll teilen", item: receiver.diagnostics.joined(separator: "\n"))
                                 Text(receiver.diagnostics.suffix(8).joined(separator: "\n"))
                                     .font(.caption.monospaced()).textSelection(.enabled)
                             }
@@ -71,5 +73,6 @@ struct ReceiverView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .statusBarHidden(fullscreen)
     }
 }
