@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <initializer_list>
 
 struct PacketInput {
     const void *bytes; UInt32 length; bool supplied;
@@ -19,6 +20,21 @@ static OSStatus supplyPacket(AudioConverterRef, UInt32 *count, AudioBufferList *
     buffers->mBuffers[0] = {2, packet->length, const_cast<void *>(packet->bytes)};
     if (description) *description = &packet->description;
     return noErr;
+}
+
+// Wraps a raw AudioSpecificConfig into an MPEG-4 ES_Descriptor (esds payload).
+static NSData *esdsCookie(const uint8_t *asc, size_t n) {
+    NSMutableData *d = [NSMutableData data];
+    auto put = [&](std::initializer_list<uint8_t> bytes) { for (uint8_t b : bytes) [d appendBytes:&b length:1]; };
+    const uint8_t decSpecific = 2 + (uint8_t)n;
+    const uint8_t decConfig = 13 + decSpecific;
+    const uint8_t es = 3 + 2 + decConfig + 3;
+    put({0x03, es, 0x00, 0x00, 0x00});
+    put({0x04, decConfig, 0x40, 0x15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+    put({0x05, (uint8_t)n});
+    [d appendBytes:asc length:n];
+    put({0x06, 0x01, 0x02});
+    return d;
 }
 
 @implementation AudioRenderer {
@@ -59,11 +75,19 @@ static OSStatus supplyPacket(AudioConverterRef, UInt32 *count, AudioBufferList *
     if (status == noErr && compression != 2) {
         const uint8_t lc[] = {0x12, 0x10};
         const uint8_t eld[] = {0xf8, 0xe8, 0x50, 0x00};
-        status = AudioConverterSetProperty(_converter, kAudioConverterDecompressionMagicCookie,
-            compression == 8 ? sizeof(eld) : sizeof(lc), compression == 8 ? eld : lc);
+        const uint8_t *asc = compression == 8 ? eld : lc;
+        const size_t ascSize = compression == 8 ? sizeof(eld) : sizeof(lc);
+        status = AudioConverterSetProperty(_converter, kAudioConverterDecompressionMagicCookie, (UInt32)ascSize, asc);
+        if (status != noErr) {
+            // Some CoreAudio versions only accept the cookie wrapped as an esds descriptor.
+            NSData *esds = esdsCookie(asc, ascSize);
+            if (AudioConverterSetProperty(_converter, kAudioConverterDecompressionMagicCookie,
+                                          (UInt32)esds.length, esds.bytes) == noErr) status = noErr;
+        }
     }
     if (status != noErr) {
-        if (error) *error = [NSError errorWithDomain:NSOSStatusErrorDomain code:status userInfo:nil];
+        if (error) *error = [NSError errorWithDomain:NSOSStatusErrorDomain code:status userInfo:@{
+            NSLocalizedDescriptionKey: [NSString stringWithFormat:@"audio codec %u (frames %u) rejected, OSStatus %d", compression, frames, (int)status]}];
         [self stop]; return NO;
     }
     _engine = [AVAudioEngine new]; _player = [AVAudioPlayerNode new];
