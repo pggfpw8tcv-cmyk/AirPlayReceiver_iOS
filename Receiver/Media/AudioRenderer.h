@@ -7,5 +7,6 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setVolumeDecibels:(float)volume;
 - (void)flush;
 - (void)stop;
+@property (nonatomic, copy, nullable) NSString *lastFailure;
 @end
 NS_ASSUME_NONNULL_END

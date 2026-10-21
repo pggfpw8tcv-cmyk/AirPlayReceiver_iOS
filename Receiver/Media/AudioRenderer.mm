@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <vector>
 #include <initializer_list>
 
 struct PacketInput {
@@ -45,6 +46,7 @@ static NSData *esdsCookie(const uint8_t *asc, size_t n) {
     uint32_t _frames;
     uint8_t _compression;
     float _volume;
+    BOOL _started;
     std::shared_ptr<std::atomic<int>> _pending;
 }
 - (instancetype)init {
@@ -58,7 +60,8 @@ static NSData *esdsCookie(const uint8_t *asc, size_t n) {
         if (error) *error = [NSError errorWithDomain:@"ReceiverAudio" code:-1 userInfo:@{NSLocalizedDescriptionKey:@"Unsupported audio format"}];
         return NO;
     }
-    _frames = frames; _compression = compression;
+    _frames = frames; _compression = compression; _started = NO;
+    OSStatus secondStatus = 0;
     AudioStreamBasicDescription input = {};
     input.mSampleRate = 44100; input.mChannelsPerFrame = 2; input.mFramesPerPacket = frames;
     input.mFormatID = compression == 2 ? kAudioFormatAppleLossless : (compression == 8 ? kAudioFormatMPEG4AAC_ELD : kAudioFormatMPEG4AAC);
@@ -70,6 +73,14 @@ static NSData *esdsCookie(const uint8_t *asc, size_t n) {
         uint8_t cookie[] = {0,0,1,0x60,0,16,40,10,14,2,0,255,0,0,0,0,0,0,0,0,0,0,0xac,0x44};
         cookie[0] = frames >> 24; cookie[1] = frames >> 16; cookie[2] = frames >> 8; cookie[3] = frames;
         status = AudioConverterSetProperty(_converter, kAudioConverterDecompressionMagicCookie, sizeof(cookie), cookie);
+        if (status != noErr) {
+            // Fallback: QuickTime-wrapped cookie (frma/alac + alac atom + terminator).
+            std::vector<uint8_t> wrapped = {0,0,0,12,'f','r','m','a','a','l','a','c', 0,0,0,36,'a','l','a','c',0,0,0,0};
+            wrapped.insert(wrapped.end(), cookie, cookie + sizeof(cookie));
+            wrapped.insert(wrapped.end(), {0,0,0,8,0,0,0,0});
+            if (AudioConverterSetProperty(_converter, kAudioConverterDecompressionMagicCookie,
+                                          (UInt32)wrapped.size(), wrapped.data()) == noErr) status = noErr;
+        }
     }
     // AAC AudioSpecificConfig is needed for the ELD profile (480 vs 512 frame length).
     if (status == noErr && compression != 2) {
@@ -81,13 +92,14 @@ static NSData *esdsCookie(const uint8_t *asc, size_t n) {
         if (status != noErr) {
             // Some CoreAudio versions only accept the cookie wrapped as an esds descriptor.
             NSData *esds = esdsCookie(asc, ascSize);
-            if (AudioConverterSetProperty(_converter, kAudioConverterDecompressionMagicCookie,
-                                          (UInt32)esds.length, esds.bytes) == noErr) status = noErr;
+            const OSStatus retry = AudioConverterSetProperty(_converter, kAudioConverterDecompressionMagicCookie,
+                                                              (UInt32)esds.length, esds.bytes);
+            if (retry == noErr) status = noErr; else secondStatus = retry;
         }
     }
     if (status != noErr) {
         if (error) *error = [NSError errorWithDomain:NSOSStatusErrorDomain code:status userInfo:@{
-            NSLocalizedDescriptionKey: [NSString stringWithFormat:@"audio codec %u (frames %u) rejected, OSStatus %d", compression, frames, (int)status]}];
+            NSLocalizedDescriptionKey: [NSString stringWithFormat:@"Audio-Codec %u (%u Frames) abgelehnt, OSStatus %d (zweiter Versuch %d)", compression, frames, (int)status, (int)secondStatus]}];
         [self stop]; return NO;
     }
     _engine = [AVAudioEngine new]; _player = [AVAudioPlayerNode new];
@@ -99,12 +111,17 @@ static NSData *esdsCookie(const uint8_t *asc, size_t n) {
     return YES;
 }
 - (BOOL)enqueuePacket:(NSData *)data presentationTime:(uint64_t)hostNanoseconds {
-    if (!_converter || !_engine.isRunning || data.length == 0 || data.length > 65536 || _pending->load() >= 96) return NO;
+    if (!_converter || !_engine.isRunning) { self.lastFailure = @"Audio-Engine läuft nicht"; return NO; }
+    if (data.length == 0 || data.length > 65536) { self.lastFailure = @"Ungültige Paketgröße"; return NO; }
+    if (_pending->load() >= 96) { self.lastFailure = @"Puffer voll"; return NO; }
     AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:_format frameCapacity:4096];
     PacketInput packet = {data.bytes, (UInt32)data.length, false, {0, _frames, (UInt32)data.length}};
     UInt32 count = _frames;
     OSStatus status = AudioConverterFillComplexBuffer(_converter, supplyPacket, &packet, &count, buffer.mutableAudioBufferList, NULL);
-    if ((status != noErr && status != -1) || count == 0 || count > buffer.frameCapacity) return NO;
+    if ((status != noErr && status != -1) || count == 0 || count > buffer.frameCapacity) {
+        self.lastFailure = [NSString stringWithFormat:@"Dekodierung fehlgeschlagen (OSStatus %d, %u Frames)", (int)status, (unsigned)count];
+        return NO;
+    }
     buffer.frameLength = count;
     const double seconds = double(hostNanoseconds) / 1e9;
     const double latency = AVAudioSession.sharedInstance.outputLatency + AVAudioSession.sharedInstance.IOBufferDuration;
@@ -112,7 +129,10 @@ static NSData *esdsCookie(const uint8_t *asc, size_t n) {
     AVAudioTime *time = [AVAudioTime timeWithHostTime:host];
     auto pending = _pending;
     pending->fetch_add(1);
-    [_player scheduleBuffer:buffer atTime:time options:0 completionCallbackType:AVAudioPlayerNodeCompletionDataPlayedBack
+    // Only the first buffer is placed on the timeline; the rest follow it gaplessly.
+    AVAudioTime *when = _started ? nil : time;
+    _started = YES;
+    [_player scheduleBuffer:buffer atTime:when options:0 completionCallbackType:AVAudioPlayerNodeCompletionDataPlayedBack
         completionHandler:^(AVAudioPlayerNodeCompletionCallbackType) { pending->fetch_sub(1); }];
     if (!_player.isPlaying) [_player play];
     return YES;
@@ -124,6 +144,7 @@ static NSData *esdsCookie(const uint8_t *asc, size_t n) {
 }
 - (void)flush {
     [_player stop];
+    _started = NO;
     _pending = std::make_shared<std::atomic<int>>(0);
     if (_converter) AudioConverterReset(_converter);
 }
